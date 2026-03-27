@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseA1Range } from "./tools";
+import { parseA1Range } from "./a1";
 
 describe("parseA1Range", () => {
 	it("parses single cell", () => {

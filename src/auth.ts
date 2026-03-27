@@ -1,37 +1,23 @@
-import { exchangeAuthCodeForTokens, OAuthTokenRecord, refreshAccessToken, type GoogleAuthEnv } from "./google";
+import { getMcpAuthContext } from "agents/mcp";
+import { exchangeAuthCodeForTokens, googleApiRequest, OAuthTokenRecord, refreshAccessToken, type GoogleAuthEnv } from "./google";
 
-const OAUTH_STATE_PREFIX = "oauth-state:";
-const OAUTH_TOKEN_PREFIX = "oauth-token:";
+const MCP_OAUTH_STATE_PREFIX = "mcp-oauth-state:";
+const GOOGLE_TOKEN_PREFIX = "google-token:";
 const GOOGLE_SCOPES = [
 	"https://www.googleapis.com/auth/spreadsheets",
 	"https://www.googleapis.com/auth/drive",
 ];
 
-interface OAuthStateRecord {
-	sessionToken: string;
-	codeVerifier: string;
+interface McpOAuthStateRecord {
+	oauthRequest: unknown;
 }
 
 export interface AuthEnv extends GoogleAuthEnv {
 	GOOGLE_AUTH_KV: KVNamespace;
-}
-
-export interface AuthStartResponse {
-	session_token: string;
-	authorization_url: string;
-	expires_in_seconds: number;
-}
-
-function toBase64Url(buffer: ArrayBuffer): string {
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function sha256(input: string): Promise<string> {
-	const encoded = new TextEncoder().encode(input);
-	return toBase64Url(await crypto.subtle.digest("SHA-256", encoded));
+	OAUTH_PROVIDER: {
+		parseAuthRequest: (request: Request) => Promise<unknown>;
+		completeAuthorization: (args: { request: unknown; userId: string; scope?: string[] }) => Promise<{ redirectTo: string }>;
+	};
 }
 
 function randomString(bytes = 32): string {
@@ -42,14 +28,18 @@ function randomString(bytes = 32): string {
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-export async function buildAuthStart(env: AuthEnv): Promise<AuthStartResponse> {
-	const sessionToken = crypto.randomUUID();
-	const state = randomString();
-	const codeVerifier = randomString(64);
-	const codeChallenge = await sha256(codeVerifier);
+function parseScopesFromAuthRequest(authRequest: unknown): string[] {
+	if (!authRequest || typeof authRequest !== "object") return [];
+	const maybeScope = (authRequest as { scope?: unknown }).scope;
+	if (typeof maybeScope !== "string") return [];
+	return maybeScope.split(" ").map((s) => s.trim()).filter(Boolean);
+}
 
-	const stateRecord: OAuthStateRecord = { sessionToken, codeVerifier };
-	await env.GOOGLE_AUTH_KV.put(`${OAUTH_STATE_PREFIX}${state}`, JSON.stringify(stateRecord), {
+export async function beginAuthorize(request: Request, env: AuthEnv): Promise<Response> {
+	const oauthRequest = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+	const state = randomString();
+	const stateRecord: McpOAuthStateRecord = { oauthRequest };
+	await env.GOOGLE_AUTH_KV.put(`${MCP_OAUTH_STATE_PREFIX}${state}`, JSON.stringify(stateRecord), {
 		expirationTtl: 600,
 	});
 
@@ -59,16 +49,9 @@ export async function buildAuthStart(env: AuthEnv): Promise<AuthStartResponse> {
 	url.searchParams.set("redirect_uri", env.GOOGLE_OAUTH_REDIRECT_URI);
 	url.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
 	url.searchParams.set("state", state);
-	url.searchParams.set("code_challenge", codeChallenge);
-	url.searchParams.set("code_challenge_method", "S256");
 	url.searchParams.set("access_type", "offline");
 	url.searchParams.set("prompt", "consent");
-
-	return {
-		session_token: sessionToken,
-		authorization_url: url.toString(),
-		expires_in_seconds: 600,
-	};
+	return Response.redirect(url.toString(), 302);
 }
 
 export async function handleGoogleAuthCallback(request: Request, env: AuthEnv): Promise<Response> {
@@ -79,34 +62,47 @@ export async function handleGoogleAuthCallback(request: Request, env: AuthEnv): 
 		return new Response("Missing code or state.", { status: 400 });
 	}
 
-	const stateRaw = await env.GOOGLE_AUTH_KV.get(`${OAUTH_STATE_PREFIX}${state}`);
+	const stateRaw = await env.GOOGLE_AUTH_KV.get(`${MCP_OAUTH_STATE_PREFIX}${state}`);
 	if (!stateRaw) {
 		return new Response("State expired or invalid.", { status: 400 });
 	}
-	const stateRecord = JSON.parse(stateRaw) as OAuthStateRecord;
+	const stateRecord = JSON.parse(stateRaw) as McpOAuthStateRecord;
 
 	try {
-		const tokens = await exchangeAuthCodeForTokens(env, code, stateRecord.codeVerifier);
-		await env.GOOGLE_AUTH_KV.put(`${OAUTH_TOKEN_PREFIX}${stateRecord.sessionToken}`, JSON.stringify(tokens));
-		await env.GOOGLE_AUTH_KV.delete(`${OAUTH_STATE_PREFIX}${state}`);
-		const body = [
-			"Google authentication complete.",
-			"",
-			"Return to Claude and continue using this session token:",
-			stateRecord.sessionToken,
-		].join("\n");
-		return new Response(body, {
-			headers: { "Content-Type": "text/plain; charset=utf-8" },
+		const tokens = await exchangeAuthCodeForTokens(env, code);
+		const profile = await googleApiRequest<{ sub: string }>(
+			tokens.accessToken,
+			"https://openidconnect.googleapis.com/v1/userinfo",
+		);
+		await env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${profile.sub}`, JSON.stringify(tokens));
+		await env.GOOGLE_AUTH_KV.delete(`${MCP_OAUTH_STATE_PREFIX}${state}`);
+
+		const result = await env.OAUTH_PROVIDER.completeAuthorization({
+			request: stateRecord.oauthRequest,
+			userId: profile.sub,
+			scope: parseScopesFromAuthRequest(stateRecord.oauthRequest),
 		});
+		return Response.redirect(result.redirectTo, 302);
 	} catch (error) {
 		return new Response(`Authentication failed: ${(error as Error).message}`, { status: 500 });
 	}
 }
 
-export async function getValidAccessToken(env: AuthEnv, sessionToken: string): Promise<string> {
-	const raw = await env.GOOGLE_AUTH_KV.get(`${OAUTH_TOKEN_PREFIX}${sessionToken}`);
+export function getAuthenticatedUserId(): string {
+	const ctx = getMcpAuthContext();
+	const userId =
+		(ctx as { props?: { userId?: string }; userId?: string } | undefined)?.props?.userId ??
+		(ctx as { userId?: string } | undefined)?.userId;
+	if (!userId) {
+		throw new Error("Missing authenticated user context.");
+	}
+	return userId;
+}
+
+export async function getValidAccessToken(env: AuthEnv, userId: string): Promise<string> {
+	const raw = await env.GOOGLE_AUTH_KV.get(`${GOOGLE_TOKEN_PREFIX}${userId}`);
 	if (!raw) {
-		throw new Error("No token found for session. Run start_google_auth first.");
+		throw new Error("No Google token found for authenticated user. Use Claude Connect first.");
 	}
 
 	let token = JSON.parse(raw) as OAuthTokenRecord;
@@ -115,7 +111,7 @@ export async function getValidAccessToken(env: AuthEnv, sessionToken: string): P
 			throw new Error("Access token expired and no refresh token available.");
 		}
 		token = await refreshAccessToken(env, token.refreshToken);
-		await env.GOOGLE_AUTH_KV.put(`${OAUTH_TOKEN_PREFIX}${sessionToken}`, JSON.stringify(token));
+		await env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${userId}`, JSON.stringify(token));
 	}
 
 	return token.accessToken;

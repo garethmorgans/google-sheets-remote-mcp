@@ -1,13 +1,14 @@
 # Google Sheets Remote MCP on Cloudflare Workers
 
-Cloudflare Workers-hosted remote MCP server with Google OAuth and Google Sheets/Drive tools.
+Cloudflare Workers-hosted remote MCP server with Claude-native OAuth connect and Google Sheets/Drive tools.
 
 This project is built from the Cloudflare Workers MCP template and implements a Workers-native Google Sheets MCP toolset inspired by [`xing5/mcp-google-sheets`](https://github.com/xing5/mcp-google-sheets).
 
 ## Features
 
 - Remote MCP endpoint on Cloudflare Workers (`/mcp`).
-- Per-user Google OAuth flow (each user authenticates their own Google account).
+- Native Claude `Connect` OAuth flow.
+- Per-user Google OAuth flow behind Claude auth (persistent across sessions).
 - Google Sheets and Drive operations (listing, reading, writing, sheet management, sharing, chart creation).
 
 ## Prerequisites
@@ -31,7 +32,7 @@ wrangler secret put GOOGLE_OAUTH_REDIRECT_URI
 `GOOGLE_OAUTH_REDIRECT_URI` must be:
 
 ```text
-https://<your-worker-domain>/auth/google/callback
+https://<your-worker-domain>/callback
 ```
 
 Also configure `GOOGLE_AUTH_KV` namespace in `wrangler.jsonc`.
@@ -58,7 +59,10 @@ npm run deploy
 Deployed endpoints:
 
 - `https://<worker-domain>/mcp`
-- `https://<worker-domain>/auth/google/callback`
+- `https://<worker-domain>/authorize`
+- `https://<worker-domain>/oauth/token`
+- `https://<worker-domain>/oauth/register`
+- `https://<worker-domain>/callback`
 
 ## Claude Cowork / mcp-remote Setup
 
@@ -77,17 +81,15 @@ Example MCP config:
 
 ## Authentication Flow
 
-1. Call tool `start_google_auth`.
-2. Open returned `authorization_url`.
-3. Complete Google consent.
-4. Callback page returns a `session_token`.
-5. Use `session_token` with Google Sheets tools.
+1. Add the MCP URL to Claude via `mcp-remote`.
+2. Claude shows `Connect`.
+3. User completes OAuth + Google consent in browser.
+4. Claude stores MCP auth token, and the worker stores Google refresh token by user identity.
+5. Tools work without passing a `session_token`.
 
 ## Tool Coverage
 
 Implemented tools:
-
-- `start_google_auth`
 - `list_spreadsheets`
 - `create_spreadsheet`
 - `list_sheets`
@@ -111,6 +113,6 @@ Implemented tools:
 
 ## Notes
 
-- Tool schemas include `session_token` for per-user token lookup.
-- Access tokens are refreshed automatically when refresh tokens are available.
+- Tool schemas no longer require `session_token`; user context is resolved from MCP auth.
+- Google access tokens are refreshed automatically when refresh tokens are available.
 - Ensure OAuth consent screen + redirect URI are configured exactly in Google Cloud.

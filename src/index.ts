@@ -1,6 +1,7 @@
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
-import { handleGoogleAuthCallback, type AuthEnv } from "./auth";
+import { beginAuthorize, handleGoogleAuthCallback, type AuthEnv } from "./auth";
 import { registerTools } from "./tools";
 
 export class GoogleSheetsMCP extends McpAgent {
@@ -19,18 +20,33 @@ export class GoogleSheetsMCP extends McpAgent {
 // failures when upgrading the worker.
 export class MyMCP extends GoogleSheetsMCP {}
 
-export default {
+const apiHandler = {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		return GoogleSheetsMCP.serve("/mcp").fetch(request, env, ctx);
+	},
+};
+
+const defaultHandler = {
+	fetch(request: Request, env: Env) {
 		const url = new URL(request.url);
 
-		if (url.pathname === "/auth/google/callback") {
-			return handleGoogleAuthCallback(request, env as unknown as AuthEnv);
+		if (url.pathname === "/authorize") {
+			return beginAuthorize(request, env as unknown as AuthEnv);
 		}
 
-		if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
-			return GoogleSheetsMCP.serve("/mcp").fetch(request, env, ctx);
+		if (url.pathname === "/callback" || url.pathname === "/auth/google/callback") {
+			return handleGoogleAuthCallback(request, env as unknown as AuthEnv);
 		}
 
 		return new Response("Not found", { status: 404 });
 	},
 };
+
+export default new OAuthProvider({
+	authorizeEndpoint: "/authorize",
+	tokenEndpoint: "/oauth/token",
+	clientRegistrationEndpoint: "/oauth/register",
+	apiRoute: "/mcp",
+	apiHandler: apiHandler as any,
+	defaultHandler: defaultHandler as any,
+});

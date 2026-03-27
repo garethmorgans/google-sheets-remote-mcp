@@ -26,6 +26,10 @@
 		{
 			"binding": "GOOGLE_AUTH_KV",
 			"id": "954d6603d39847bf92840be932a00499"
+		},
+		{
+			"binding": "OAUTH_KV",
+			"id": "23c2a8ec7f7945eaa8bdb0b683f64386"
 		}
 	],
 	"observability": {

@@ -19,7 +19,7 @@ export interface GoogleAuthEnv {
 export async function exchangeAuthCodeForTokens(
 	env: GoogleAuthEnv,
 	code: string,
-	codeVerifier: string,
+	codeVerifier?: string,
 ): Promise<OAuthTokenRecord> {
 	const body = new URLSearchParams({
 		code,
@@ -27,8 +27,10 @@ export async function exchangeAuthCodeForTokens(
 		client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
 		redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI,
 		grant_type: "authorization_code",
-		code_verifier: codeVerifier,
 	});
+	if (codeVerifier) {
+		body.set("code_verifier", codeVerifier);
+	}
 	const response = await fetch(GOOGLE_TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },

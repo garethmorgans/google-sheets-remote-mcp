@@ -1,18 +1,20 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { buildAuthStart, getValidAccessToken, type AuthEnv } from "./auth";
+import { getAuthenticatedUserId, getValidAccessToken, type AuthEnv } from "./auth";
+import { parseA1Range } from "./a1";
 import { driveApiUrl, googleApiRequest, sheetsApiUrl } from "./google";
 
 function textResult(data: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-function withAuth<T extends { session_token: string }>(
+function withAuth<T extends object>(
 	env: AuthEnv,
 	handler: (accessToken: string, input: T) => Promise<unknown>,
 ) {
 	return async (input: T) => {
-		const accessToken = await getValidAccessToken(env, input.session_token);
+		const userId = getAuthenticatedUserId();
+		const accessToken = await getValidAccessToken(env, userId);
 		return textResult(await handler(accessToken, input));
 	};
 }
@@ -26,32 +28,10 @@ async function getSheetId(accessToken: string, spreadsheetId: string, sheetName:
 	return found.properties.sheetId;
 }
 
-export function parseA1Range(range: string): { startRowIndex: number; endRowIndex: number; startColumnIndex: number; endColumnIndex: number } {
-	const clean = range.includes("!") ? range.split("!")[1] : range;
-	const [start, end = start] = clean.split(":");
-	const parseCell = (cell: string) => {
-		const colMatch = cell.match(/[A-Z]+/i)?.[0] ?? "A";
-		const rowMatch = cell.match(/\d+/)?.[0] ?? "1";
-		let col = 0;
-		for (const char of colMatch.toUpperCase()) col = col * 26 + (char.charCodeAt(0) - 64);
-		return { row: Number(rowMatch) - 1, col: col - 1 };
-	};
-	const startCell = parseCell(start);
-	const endCell = parseCell(end);
-	return {
-		startRowIndex: startCell.row,
-		endRowIndex: endCell.row + 1,
-		startColumnIndex: startCell.col,
-		endColumnIndex: endCell.col + 1,
-	};
-}
-
 export function registerTools(server: McpServer, env: AuthEnv): void {
-	server.tool("start_google_auth", {}, async () => textResult(await buildAuthStart(env)));
-
 	server.tool(
 		"list_spreadsheets",
-		{ session_token: z.string(), folder_id: z.string().optional() },
+		{ folder_id: z.string().optional() },
 		withAuth(env, async (accessToken, { folder_id }) => {
 			const query = folder_id
 				? `'${folder_id}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`
@@ -71,7 +51,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"create_spreadsheet",
-		{ session_token: z.string(), title: z.string(), folder_id: z.string().optional() },
+		{ title: z.string(), folder_id: z.string().optional() },
 		withAuth(env, async (accessToken, { title, folder_id }) => {
 			const created = await googleApiRequest<{ spreadsheetId: string; properties: { title: string } }>(
 				accessToken,
@@ -91,7 +71,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"list_sheets",
-		{ session_token: z.string(), spreadsheet_id: z.string() },
+		{ spreadsheet_id: z.string() },
 		withAuth(env, async (accessToken, { spreadsheet_id }) => {
 			const response = await googleApiRequest<{
 				sheets: Array<{ properties: { title: string } }>;
@@ -103,7 +83,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"get_sheet_data",
 		{
-			session_token: z.string(),
 			spreadsheet_id: z.string(),
 			sheet: z.string(),
 			range: z.string().optional(),
@@ -124,7 +103,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"get_sheet_formulas",
-		{ session_token: z.string(), spreadsheet_id: z.string(), sheet: z.string(), range: z.string().optional() },
+		{ spreadsheet_id: z.string(), sheet: z.string(), range: z.string().optional() },
 		withAuth(env, async (accessToken, { spreadsheet_id, sheet, range }) => {
 			const targetRange = range ? `${sheet}!${range}` : sheet;
 			return googleApiRequest(
@@ -137,7 +116,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"update_cells",
 		{
-			session_token: z.string(),
 			spreadsheet_id: z.string(),
 			sheet: z.string(),
 			range: z.string(),
@@ -156,7 +134,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"batch_update_cells",
 		{
-			session_token: z.string(),
 			spreadsheet_id: z.string(),
 			sheet: z.string(),
 			ranges: z.record(z.string(), z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])))),
@@ -173,7 +150,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"add_rows",
-		{ session_token: z.string(), spreadsheet_id: z.string(), sheet: z.string(), count: z.number().int().positive(), start_row: z.number().int().nonnegative().optional() },
+		{ spreadsheet_id: z.string(), sheet: z.string(), count: z.number().int().positive(), start_row: z.number().int().nonnegative().optional() },
 		withAuth(env, async (accessToken, { spreadsheet_id, sheet, count, start_row = 0 }) => {
 			const sheetId = await getSheetId(accessToken, spreadsheet_id, sheet);
 			return googleApiRequest(accessToken, sheetsApiUrl(`/${spreadsheet_id}:batchUpdate`), {
@@ -193,7 +170,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"add_columns",
-		{ session_token: z.string(), spreadsheet_id: z.string(), sheet: z.string(), count: z.number().int().positive(), start_column: z.number().int().nonnegative().optional() },
+		{ spreadsheet_id: z.string(), sheet: z.string(), count: z.number().int().positive(), start_column: z.number().int().nonnegative().optional() },
 		withAuth(env, async (accessToken, { spreadsheet_id, sheet, count, start_column = 0 }) => {
 			const sheetId = await getSheetId(accessToken, spreadsheet_id, sheet);
 			return googleApiRequest(accessToken, sheetsApiUrl(`/${spreadsheet_id}:batchUpdate`), {
@@ -213,7 +190,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"create_sheet",
-		{ session_token: z.string(), spreadsheet_id: z.string(), title: z.string() },
+		{ spreadsheet_id: z.string(), title: z.string() },
 		withAuth(env, async (accessToken, { spreadsheet_id, title }) => {
 			return googleApiRequest(accessToken, sheetsApiUrl(`/${spreadsheet_id}:batchUpdate`), {
 				method: "POST",
@@ -225,7 +202,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"rename_sheet",
-		{ session_token: z.string(), spreadsheet: z.string(), sheet: z.string(), new_name: z.string() },
+		{ spreadsheet: z.string(), sheet: z.string(), new_name: z.string() },
 		withAuth(env, async (accessToken, { spreadsheet, sheet, new_name }) => {
 			const sheetId = await getSheetId(accessToken, spreadsheet, sheet);
 			return googleApiRequest(accessToken, sheetsApiUrl(`/${spreadsheet}:batchUpdate`), {
@@ -238,7 +215,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"copy_sheet",
-		{ session_token: z.string(), src_spreadsheet: z.string(), src_sheet: z.string(), dst_spreadsheet: z.string(), dst_sheet: z.string() },
+		{ src_spreadsheet: z.string(), src_sheet: z.string(), dst_spreadsheet: z.string(), dst_sheet: z.string() },
 		withAuth(env, async (accessToken, { src_spreadsheet, src_sheet, dst_spreadsheet, dst_sheet }) => {
 			const sourceSheetId = await getSheetId(accessToken, src_spreadsheet, src_sheet);
 			const copied = await googleApiRequest<{ sheetId: number }>(
@@ -259,7 +236,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"batch_update",
-		{ session_token: z.string(), spreadsheet_id: z.string(), requests: z.array(z.unknown()) },
+		{ spreadsheet_id: z.string(), requests: z.array(z.unknown()) },
 		withAuth(env, async (accessToken, { spreadsheet_id, requests }) => {
 			return googleApiRequest(accessToken, sheetsApiUrl(`/${spreadsheet_id}:batchUpdate`), {
 				method: "POST",
@@ -271,7 +248,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"find_in_spreadsheet",
-		{ session_token: z.string(), spreadsheet_id: z.string(), query: z.string(), max_results: z.number().int().positive().optional() },
+		{ spreadsheet_id: z.string(), query: z.string(), max_results: z.number().int().positive().optional() },
 		withAuth(env, async (accessToken, { spreadsheet_id, query, max_results = 50 }) => {
 			const spreadsheet = await googleApiRequest<{
 				sheets: Array<{ properties: { title: string }; data?: Array<{ rowData?: Array<{ values?: Array<{ formattedValue?: string }> }> }> }>;
@@ -296,7 +273,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"search_spreadsheets",
-		{ session_token: z.string(), query: z.string() },
+		{ query: z.string() },
 		withAuth(env, async (accessToken, { query }) => {
 			const response = await googleApiRequest<{ files: Array<{ id: string; name: string }> }>(
 				accessToken,
@@ -311,7 +288,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"list_folders",
-		{ session_token: z.string(), parent_folder_id: z.string().optional() },
+		{ parent_folder_id: z.string().optional() },
 		withAuth(env, async (accessToken, { parent_folder_id }) => {
 			const parentClause = parent_folder_id ? `'${parent_folder_id}' in parents and ` : "";
 			const response = await googleApiRequest<{ files: Array<{ id: string; name: string }> }>(
@@ -328,7 +305,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"get_multiple_sheet_data",
 		{
-			session_token: z.string(),
 			queries: z.array(z.object({ spreadsheet_id: z.string(), sheet: z.string(), range: z.string() })),
 		},
 		withAuth(env, async (accessToken, { queries }) => {
@@ -350,7 +326,7 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 
 	server.tool(
 		"get_multiple_spreadsheet_summary",
-		{ session_token: z.string(), spreadsheet_ids: z.array(z.string()), rows_to_fetch: z.number().int().positive().optional() },
+		{ spreadsheet_ids: z.array(z.string()), rows_to_fetch: z.number().int().positive().optional() },
 		withAuth(env, async (accessToken, { spreadsheet_ids, rows_to_fetch = 5 }) => {
 			return Promise.all(
 				spreadsheet_ids.map(async (spreadsheetId) => {
@@ -381,7 +357,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"share_spreadsheet",
 		{
-			session_token: z.string(),
 			spreadsheet_id: z.string(),
 			recipients: z.array(z.object({ email_address: z.string().email(), role: z.enum(["reader", "commenter", "writer"]) })),
 			send_notification: z.boolean().optional(),
@@ -412,7 +387,6 @@ export function registerTools(server: McpServer, env: AuthEnv): void {
 	server.tool(
 		"add_chart",
 		{
-			session_token: z.string(),
 			spreadsheet_id: z.string(),
 			sheet: z.string(),
 			chart_type: z.enum(["COLUMN", "BAR", "LINE", "AREA", "PIE", "SCATTER", "COMBO", "HISTOGRAM"]),
