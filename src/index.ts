@@ -14,6 +14,11 @@ export class GoogleSheetsMCP extends McpAgent {
 	}
 }
 
+// Backwards-compatibility: older Durable Objects were created from the template's
+// exported class name `MyMCP`. Keeping this export prevents Cloudflare deploy-time
+// failures when upgrading the worker.
+export class MyMCP extends GoogleSheetsMCP {}
+
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
