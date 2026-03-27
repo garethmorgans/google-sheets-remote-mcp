@@ -10,18 +10,24 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"migrations": [
 		{
-			"new_sqlite_classes": ["MyMCP"],
+			"new_sqlite_classes": ["GoogleSheetsMCP"],
 			"tag": "v1"
 		}
 	],
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "MyMCP",
+				"class_name": "GoogleSheetsMCP",
 				"name": "MCP_OBJECT"
 			}
 		]
 	},
+	"kv_namespaces": [
+		{
+			"binding": "GOOGLE_AUTH_KV",
+			"id": "954d6603d39847bf92840be932a00499"
+		}
+	],
 	"observability": {
 		"enabled": true
 	}

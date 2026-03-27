@@ -1,51 +1,116 @@
-# Building a Remote MCP Server on Cloudflare (Without Auth)
+# Google Sheets Remote MCP on Cloudflare Workers
 
-This example allows you to deploy a remote MCP server that doesn't require authentication on Cloudflare Workers.
+Cloudflare Workers-hosted remote MCP server with Google OAuth and Google Sheets/Drive tools.
 
-## Get started:
+This project is built from the Cloudflare Workers MCP template and implements a Workers-native Google Sheets MCP toolset inspired by [`xing5/mcp-google-sheets`](https://github.com/xing5/mcp-google-sheets).
 
-[![Deploy to Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/ai/tree/main/demos/remote-mcp-authless)
+## Features
 
-This will deploy your MCP server to a URL like: `remote-mcp-server-authless.<your-account>.workers.dev/sse`
+- Remote MCP endpoint on Cloudflare Workers (`/mcp`).
+- Per-user Google OAuth flow (each user authenticates their own Google account).
+- Google Sheets and Drive operations (listing, reading, writing, sheet management, sharing, chart creation).
 
-Alternatively, you can use the command line below to get the remote MCP Server created on your local machine:
+## Prerequisites
+
+1. Cloudflare account + Wrangler configured.
+2. Google Cloud project with:
+   - Google Sheets API enabled
+   - Google Drive API enabled
+3. OAuth 2.0 credentials (Web application) in Google Cloud.
+
+## Environment and Secrets
+
+Set these secrets:
 
 ```bash
-npm create cloudflare@latest -- my-mcp-server --template=cloudflare/ai/demos/remote-mcp-authless
+wrangler secret put GOOGLE_OAUTH_CLIENT_ID
+wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+wrangler secret put GOOGLE_OAUTH_REDIRECT_URI
 ```
 
-## Customizing your MCP Server
+`GOOGLE_OAUTH_REDIRECT_URI` must be:
 
-To add your own [tools](https://developers.cloudflare.com/agents/model-context-protocol/tools/) to the MCP server, define each tool inside the `init()` method of `src/index.ts` using `this.server.tool(...)`.
+```text
+https://<your-worker-domain>/auth/google/callback
+```
 
-## Connect to Cloudflare AI Playground
+Also configure `GOOGLE_AUTH_KV` namespace in `wrangler.jsonc`.
 
-You can connect to your MCP server from the Cloudflare AI Playground, which is a remote MCP client:
+## Local Development
 
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter your deployed MCP server URL (`remote-mcp-server-authless.<your-account>.workers.dev/sse`)
-3. You can now use your MCP tools directly from the playground!
+```bash
+npm install
+npm run dev
+```
 
-## Connect Claude Desktop to your MCP server
+MCP endpoint:
 
-You can also connect to your remote MCP server from local MCP clients, by using the [mcp-remote proxy](https://www.npmjs.com/package/mcp-remote).
+```text
+http://localhost:8787/mcp
+```
 
-To connect to your MCP server from Claude Desktop, follow [Anthropic's Quickstart](https://modelcontextprotocol.io/quickstart/user) and within Claude Desktop go to Settings > Developer > Edit Config.
+## Deployment
 
-Update with this configuration:
+```bash
+npm run deploy
+```
+
+Deployed endpoints:
+
+- `https://<worker-domain>/mcp`
+- `https://<worker-domain>/auth/google/callback`
+
+## Claude Cowork / mcp-remote Setup
+
+Example MCP config:
 
 ```json
 {
 	"mcpServers": {
-		"calculator": {
+		"google-sheets-remote": {
 			"command": "npx",
-			"args": [
-				"mcp-remote",
-				"http://localhost:8787/sse" // or remote-mcp-server-authless.your-account.workers.dev/sse
-			]
+			"args": ["mcp-remote", "https://<worker-domain>/mcp"]
 		}
 	}
 }
 ```
 
-Restart Claude and you should see the tools become available.
+## Authentication Flow
+
+1. Call tool `start_google_auth`.
+2. Open returned `authorization_url`.
+3. Complete Google consent.
+4. Callback page returns a `session_token`.
+5. Use `session_token` with Google Sheets tools.
+
+## Tool Coverage
+
+Implemented tools:
+
+- `start_google_auth`
+- `list_spreadsheets`
+- `create_spreadsheet`
+- `list_sheets`
+- `get_sheet_data`
+- `get_sheet_formulas`
+- `update_cells`
+- `batch_update_cells`
+- `add_rows`
+- `add_columns`
+- `create_sheet`
+- `rename_sheet`
+- `copy_sheet`
+- `batch_update`
+- `find_in_spreadsheet`
+- `search_spreadsheets`
+- `list_folders`
+- `get_multiple_sheet_data`
+- `get_multiple_spreadsheet_summary`
+- `share_spreadsheet`
+- `add_chart`
+
+## Notes
+
+- Tool schemas include `session_token` for per-user token lookup.
+- Access tokens are refreshed automatically when refresh tokens are available.
+- Ensure OAuth consent screen + redirect URI are configured exactly in Google Cloud.
