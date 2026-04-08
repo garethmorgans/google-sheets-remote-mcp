@@ -11,7 +11,10 @@ export class GoogleSheetsMCP extends McpAgent {
 	});
 
 	async init() {
-		registerTools(this.server, this.env as unknown as AuthEnv);
+		registerTools(this.server, this.env as unknown as AuthEnv, () => {
+			const props = this.props as { userId?: string; sub?: string; email?: string } | undefined;
+			return props?.userId ?? props?.sub ?? props?.email;
+		});
 	}
 }
 

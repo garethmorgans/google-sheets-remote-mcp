@@ -9,6 +9,8 @@ export interface OAuthTokenRecord {
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_DRIVE_API = "https://www.googleapis.com/drive/v3";
 const GOOGLE_SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+const GOOGLE_DOCS_API = "https://docs.googleapis.com/v1/documents";
+const GOOGLE_SLIDES_API = "https://slides.googleapis.com/v1/presentations";
 
 export interface GoogleAuthEnv {
 	GOOGLE_OAUTH_CLIENT_ID: string;
@@ -111,4 +113,16 @@ export function driveApiUrl(path: string, query?: Record<string, string | undefi
 
 export function sheetsApiUrl(path: string): string {
 	return `${GOOGLE_SHEETS_API}${path}`;
+}
+
+export function docsApiUrl(path: string): string {
+	return `${GOOGLE_DOCS_API}${path}`;
+}
+
+export function slidesApiUrl(path: string): string {
+	return `${GOOGLE_SLIDES_API}${path}`;
+}
+
+export function escapeDriveQuery(input: string): string {
+	return input.replace(/'/g, "\\'");
 }

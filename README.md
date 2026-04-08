@@ -1,6 +1,6 @@
-# Google Sheets Remote MCP on Cloudflare Workers
+# Google Workspace MCP on Cloudflare Workers
 
-Cloudflare Workers-hosted remote MCP server with Claude-native OAuth connect and Google Sheets/Drive tools.
+Cloudflare Workers-hosted remote MCP server with Claude-native OAuth connect and Google Sheets, Docs, Slides, and Drive tools.
 
 This project is built from the Cloudflare Workers MCP template and implements a Workers-native Google Sheets MCP toolset inspired by [`xing5/mcp-google-sheets`](https://github.com/xing5/mcp-google-sheets).
 
@@ -9,13 +9,15 @@ This project is built from the Cloudflare Workers MCP template and implements a 
 - Remote MCP endpoint on Cloudflare Workers (`/mcp`).
 - Native Claude `Connect` OAuth flow.
 - Per-user Google OAuth flow behind Claude auth (persistent across sessions).
-- Google Sheets and Drive operations (listing, reading, writing, sheet management, sharing, chart creation).
+- Google Sheets, Docs, Slides, and Drive operations (listing, reading, writing, management, sharing).
 
 ## Prerequisites
 
 1. Cloudflare account + Wrangler configured.
 2. Google Cloud project with:
    - Google Sheets API enabled
+   - Google Docs API enabled
+   - Google Slides API enabled
    - Google Drive API enabled
 3. OAuth 2.0 credentials (Web application) in Google Cloud.
 
@@ -90,29 +92,17 @@ Example MCP config:
 ## Tool Coverage
 
 Implemented tools:
-- `list_spreadsheets`
-- `create_spreadsheet`
-- `list_sheets`
-- `get_sheet_data`
-- `get_sheet_formulas`
-- `update_cells`
-- `batch_update_cells`
-- `add_rows`
-- `add_columns`
-- `create_sheet`
-- `rename_sheet`
-- `copy_sheet`
-- `batch_update`
-- `find_in_spreadsheet`
-- `search_spreadsheets`
-- `list_folders`
-- `get_multiple_sheet_data`
-- `get_multiple_spreadsheet_summary`
-- `share_spreadsheet`
-- `add_chart`
+- **Sheets (new prefixed names + legacy aliases)**  
+  `sheets_list_spreadsheets`, `sheets_create_spreadsheet`, `sheets_list_sheets`, `sheets_get_sheet_data`, `sheets_update_cells`, `sheets_batch_update_cells`, `sheets_batch_update`, `sheets_add_rows`, `sheets_add_columns`, `sheets_create_sheet`, `sheets_rename_sheet`, `sheets_copy_sheet`, `sheets_search_spreadsheets`, `sheets_find_in_spreadsheet`, `sheets_get_multiple_sheet_data`, `sheets_get_multiple_spreadsheet_summary`, `sheets_share_spreadsheet`, `sheets_add_chart`  
+  Legacy unprefixed sheets tool names are still registered for compatibility.
+- **Docs**  
+  `docs_list_documents`, `docs_search_documents`, `docs_create_document`, `docs_get_document`, `docs_batch_update`, `docs_insert_text`, `docs_replace_all_text`, `docs_share_document`, `docs_get_multiple_document_summary`
+- **Slides**  
+  `slides_list_presentations`, `slides_search_presentations`, `slides_create_presentation`, `slides_get_presentation`, `slides_batch_update`, `slides_create_slide`, `slides_insert_text`, `slides_replace_all_text`, `slides_share_presentation`, `slides_get_multiple_presentation_summary`
 
 ## Notes
 
 - Tool schemas no longer require `session_token`; user context is resolved from MCP auth.
 - Google access tokens are refreshed automatically when refresh tokens are available.
 - Ensure OAuth consent screen + redirect URI are configured exactly in Google Cloud.
+- OAuth consent should include scopes for Sheets, Docs, Slides, and Drive access.

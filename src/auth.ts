@@ -5,6 +5,8 @@ const MCP_OAUTH_STATE_PREFIX = "mcp-oauth-state:";
 const GOOGLE_TOKEN_PREFIX = "google-token:";
 const GOOGLE_SCOPES = [
 	"https://www.googleapis.com/auth/spreadsheets",
+	"https://www.googleapis.com/auth/documents",
+	"https://www.googleapis.com/auth/presentations",
 	"https://www.googleapis.com/auth/drive",
 ];
 
@@ -16,7 +18,13 @@ export interface AuthEnv extends GoogleAuthEnv {
 	GOOGLE_AUTH_KV: KVNamespace;
 	OAUTH_PROVIDER: {
 		parseAuthRequest: (request: Request) => Promise<unknown>;
-		completeAuthorization: (args: { request: unknown; userId: string; scope?: string[] }) => Promise<{ redirectTo: string }>;
+		completeAuthorization: (args: {
+			request: unknown;
+			userId: string;
+			scope?: string[];
+			props?: Record<string, unknown>;
+			metadata?: Record<string, unknown>;
+		}) => Promise<{ redirectTo: string }>;
 	};
 }
 
@@ -33,6 +41,41 @@ function parseScopesFromAuthRequest(authRequest: unknown): string[] {
 	const maybeScope = (authRequest as { scope?: unknown }).scope;
 	if (typeof maybeScope !== "string") return [];
 	return maybeScope.split(" ").map((s) => s.trim()).filter(Boolean);
+}
+
+async function resolveGoogleUserId(accessToken: string): Promise<string> {
+	try {
+		const profile = await googleApiRequest<{ sub: string }>(
+			accessToken,
+			"https://openidconnect.googleapis.com/v1/userinfo",
+		);
+		if (profile.sub) return profile.sub;
+	} catch {
+		// Fall through to token introspection endpoint for non-openid scopes.
+	}
+
+	const response = await fetch(
+		`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+	);
+	if (!response.ok) {
+		throw new Error(`Unable to resolve Google user identity from tokeninfo: ${await response.text()}`);
+	}
+	const payload = (await response.json()) as { sub?: string; user_id?: string };
+	if (payload.sub) return payload.sub;
+	if (payload.user_id) return payload.user_id;
+
+	// Drive scope is already granted, so this endpoint provides a stable user identity.
+	const about = await googleApiRequest<{ user?: { permissionId?: string; emailAddress?: string } }>(
+		accessToken,
+		"https://www.googleapis.com/drive/v3/about?fields=user(permissionId,emailAddress)",
+	);
+	const permissionId = about.user?.permissionId;
+	if (permissionId) return permissionId;
+
+	const email = about.user?.emailAddress;
+	if (email) return email;
+
+	throw new Error("Unable to resolve Google user identity: missing sub/user_id/permissionId.");
 }
 
 export async function beginAuthorize(request: Request, env: AuthEnv): Promise<Response> {
@@ -70,17 +113,18 @@ export async function handleGoogleAuthCallback(request: Request, env: AuthEnv): 
 
 	try {
 		const tokens = await exchangeAuthCodeForTokens(env, code);
-		const profile = await googleApiRequest<{ sub: string }>(
-			tokens.accessToken,
-			"https://openidconnect.googleapis.com/v1/userinfo",
-		);
-		await env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${profile.sub}`, JSON.stringify(tokens));
+		const userId = await resolveGoogleUserId(tokens.accessToken);
+		await env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${userId}`, JSON.stringify(tokens));
 		await env.GOOGLE_AUTH_KV.delete(`${MCP_OAUTH_STATE_PREFIX}${state}`);
 
 		const result = await env.OAUTH_PROVIDER.completeAuthorization({
 			request: stateRecord.oauthRequest,
-			userId: profile.sub,
+			userId,
 			scope: parseScopesFromAuthRequest(stateRecord.oauthRequest),
+			props: {
+				userId,
+			},
+			metadata: {},
 		});
 		return Response.redirect(result.redirectTo, 302);
 	} catch (error) {
@@ -88,11 +132,12 @@ export async function handleGoogleAuthCallback(request: Request, env: AuthEnv): 
 	}
 }
 
-export function getAuthenticatedUserId(): string {
+export function getAuthenticatedUserId(fallbackResolver?: () => string | undefined): string {
 	const ctx = getMcpAuthContext();
 	const userId =
 		(ctx as { props?: { userId?: string }; userId?: string } | undefined)?.props?.userId ??
-		(ctx as { userId?: string } | undefined)?.userId;
+		(ctx as { userId?: string } | undefined)?.userId ??
+		fallbackResolver?.();
 	if (!userId) {
 		throw new Error("Missing authenticated user context.");
 	}
